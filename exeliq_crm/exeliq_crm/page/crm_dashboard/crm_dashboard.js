@@ -83,10 +83,12 @@
 		this.stages   = [];        // fetched from Sales Stage doctype
 		this.sp_users = [];        // fetched from Has Role
 		this.stage_color_map = {};
+		this.initializing = true;
 
 		this.setup_html();
 		this.load_meta().then(function (self) {
 			self.setup_filters();
+			self.initializing = false;
 			self.load_data();
 		});
 	}
@@ -155,6 +157,7 @@
 			          'This Quarter','Last Quarter','This Year','Custom'].join('\n'),
 			default: 'This Month',
 			change: function () {
+				if (self.initializing) return;
 				var p = self.f_period.get_value();
 				if (p === 'Custom') return;
 				var d = self.period_dates(p);
@@ -168,12 +171,16 @@
 		this.f_from = this.page.add_field({
 			fieldtype: 'Date', fieldname: 'date_from', label: 'From',
 			default: def[0],
-			change: function () { self.f_period.set_value('Custom'); self.load_data(); }
+			change: function () { 
+			if (self.initializing) return;
+			self.f_period.set_value('Custom'); self.load_data(); }
 		});
 		this.f_to = this.page.add_field({
 			fieldtype: 'Date', fieldname: 'date_to', label: 'To',
 			default: def[1],
-			change: function () { self.f_period.set_value('Custom'); self.load_data(); }
+			change: function () {
+			if (self.initializing) return;
+			self.f_period.set_value('Custom'); self.load_data(); }
 		});
 
 		if (this.is_mgr) {
@@ -181,7 +188,9 @@
 				fieldtype: 'Select', fieldname: 'salesperson', label: 'Salesperson',
 				options: ['All'].concat(this.sp_users).join('\n'),
 				default: 'All',
-				change: function () { self.load_data(); }
+				change: function () { 
+				if (self.initializing) return;
+				self.load_data(); }
 			});
 		}
 
