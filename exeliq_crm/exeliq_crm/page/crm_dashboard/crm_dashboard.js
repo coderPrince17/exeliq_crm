@@ -97,51 +97,40 @@
 
 	// Load Sales Stages + Sales Users in parallel
 	CRMDashboard.prototype.load_meta = function () {
-		var self = this;
-		return Promise.all([
-			// Fetch all Sales Stage records in their defined order
-			frappe.call({
-				method: 'frappe.client.get_list',
-				args: {
-					doctype: 'Sales Stage',
-					fields: ['name', 'stage_name'],
-					limit_page_length: 100,
-					order_by: 'creation asc'
-				}
-			}),
-			// Fetch all users with Sales User role
-			frappe.call({
-				method: 'frappe.client.get_list',
-				args: {
-					doctype: 'Has Role',
-					filters: [['role', '=', 'Sales User'], ['parenttype', '=', 'User']],
-					fields: ['parent'],
-					limit_page_length: 200
-				}
-			})
-		]).then(function (res) {
-			// Build stage list — use stage_name if available, else name
-			var stage_rows = (res[0].message) || [];
-			self.stages = stage_rows.map(function (r) { return r.stage_name || r.name; });
+	    var self = this;
 
-			// Make sure Won and Lost are always in the list
-			if (self.stages.indexOf(WON_STAGE) === -1)  self.stages.push(WON_STAGE);
-			if (self.stages.indexOf(LOST_STAGE) === -1) self.stages.push(LOST_STAGE);
+	    return frappe.call({
+	        method: "frappe.client.get_list",
+	        args: {
+	            doctype: "Sales Stage",
+	            fields: ["name", "stage_name"],
+	            order_by: "creation asc",
+	            limit_page_length: 100
+	        }
+	    }).then(function(r){
 
-			// Assign colors by position
-			self.stage_color_map = {};
-			self.stages.forEach(function (s, i) {
-				self.stage_color_map[s] = PALETTE[i % PALETTE.length];
-			});
+	        var rows = r.message || [];
 
-			// Build sales users list
-			var sp_rows = (res[1].message) || [];
-			self.sp_users = sp_rows.map(function (r) { return r.parent; }).filter(function (u) {
-				return u && u !== 'Administrator' && u.indexOf('Guest') === -1;
-			});
+	        self.stages = rows.map(function(x){
+	            return x.stage_name || x.name;
+	        });
 
-			return self;
-		}).catch(function () { return self; });
+	        if (self.stages.indexOf(WON_STAGE) === -1)
+	            self.stages.push(WON_STAGE);
+
+	        if (self.stages.indexOf(LOST_STAGE) === -1)
+	            self.stages.push(LOST_STAGE);
+
+	        self.stage_color_map = {};
+
+	        self.stages.forEach(function(s,i){
+	            self.stage_color_map[s] = PALETTE[i % PALETTE.length];
+	        });
+
+	        self.sp_users = [];
+
+	        return self;
+	    });
 	};
 
 	CRMDashboard.prototype.stage_color = function (s) {
@@ -256,8 +245,8 @@
 			'<div class="crm-metric"><div class="crm-metric-label">Loading…</div></div>';
 
 		var opp_filters = [
-			['modified', '>=', f.from + ' 00:00:00'],
-			['modified', '<=', f.to   + ' 23:59:59']
+			['transaction_date', '>=', f.from + ' 00:00:00'],
+			['transaction_date', '<=', f.to   + ' 23:59:59']
 		];
 		var lead_filters = [
 			['modified', '>=', f.from + ' 00:00:00'],
@@ -298,6 +287,26 @@
 		]).then(function (res) {
 			self.opps  = (res[0].message) || [];
 			self.leads = (res[1].message) || [];
+			var users = {};
+
+			self.opps.forEach(function(o){
+			    if(o.opportunity_owner)
+			    	users[o.opportunity_owner]=1;
+			});
+
+			self.leads.forEach(function(l){
+			    if(l.lead_owner)
+			    	users[l.lead_owner]=1;
+			});
+
+			self.sp_users = Object.keys(users).sort();
+			if (self.f_sp) {
+				self.f_sp.df.options = ['All']
+			    	.concat(self.sp_users)
+			    	.join('\n');
+
+				self.f_sp.refresh();
+			}
 			self.render_all();
 			self.loading = false;
 
