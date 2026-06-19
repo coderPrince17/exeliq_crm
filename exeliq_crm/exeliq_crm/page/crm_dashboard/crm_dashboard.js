@@ -84,6 +84,8 @@
 		this.sp_users = [];        // fetched from Has Role
 		this.stage_color_map = {};
 		this.initializing = true;
+		this.loading = false;
+		this.pending_reload = false;
 
 		this.setup_html();
 		this.load_meta().then(function (self) {
@@ -240,6 +242,14 @@
 	};
 
 	CRMDashboard.prototype.load_data = function () {
+
+		if (this.loading) {
+			this.pending_reload = true;
+			return;
+		}
+
+		this.loading = true;
+
 		var self = this, f = this.get_f();
 		this.destroy_charts();
 		document.getElementById('crm-metrics').innerHTML =
@@ -289,7 +299,14 @@
 			self.opps  = (res[0].message) || [];
 			self.leads = (res[1].message) || [];
 			self.render_all();
+			self.loading = false;
+
+			if (self.pending_reload) {
+				self.pending_reload = false;
+				self.load_data();
+			}
 		}).catch(function (err) {
+			self.loading = false;
 			document.getElementById('crm-metrics').innerHTML =
 				'<div style="color:var(--red);padding:10px">Error loading data. Check console.</div>';
 			console.error('CRM Dashboard:', err);
