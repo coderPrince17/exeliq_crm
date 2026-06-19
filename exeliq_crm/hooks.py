@@ -13,5 +13,3 @@ required_apps = ["frappe", "erpnext"]
 after_install = "exeliq_crm.setup.after_install"
 after_sync = "exeliq_crm.setup.after_install"
 after_migrate = "exeliq_crm.setup.after_install"
-
-app_include_js = ["/assets/exeliq_crm/js/crm_dashboard.js"]
