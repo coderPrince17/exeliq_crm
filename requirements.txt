@@ -1,2 +1,0 @@
-# Frappe is required
-frappe
