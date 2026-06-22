@@ -101,6 +101,10 @@
 		this.initializing = true;
 		this._updating_sp = false;
 		this._mshm_user   = null;
+		this._tgt_period  = "quarterly";
+		this._tgt_user    = null;
+		this.target_data    = {};
+		this.target_actuals = {};
 		this._terr_sel    = null;
 		this._src_sel     = null;
 
@@ -288,6 +292,16 @@
 		'<div class="crm-dash">' +
 
 		// Metrics
+		'<div id="crm-target-section" class="crm-card" style="margin-bottom:18px">' +
+		'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">' +
+		'<div class="crm-section-title" style="margin-bottom:0">Target performance</div>' +
+		'<div style="display:flex;gap:6px;align-items:center">' +
+		'<button class="crm-toggle active" id="tgt-quarterly">Quarter</button>' +
+		'<button class="crm-toggle" id="tgt-annual">Full FY</button>' +
+		(mgr ? '<select id="tgt-user-sel" class="crm-user-sel" style="margin-left:6px"><option value="">All users</option></select>' : "") +
+		'</div></div>' +
+		'<div id="crm-target-meter"><div class="crm-empty" style="padding:12px">Loading targets...</div></div>' +
+		'</div>' +
 		'<div id="crm-metrics" class="crm-metrics">' +
 		'<div class="crm-metric"><div class="crm-metric-label">Loading\u2026</div></div>' +
 		'</div>' +
@@ -368,6 +382,14 @@
 
 		document.getElementById('mshm-count').onclick = function(){ self.set_metric('count',this,'ms'); };
 		document.getElementById('mshm-value').onclick = function(){ self.set_metric('value',this,'ms'); };
+
+		// Target period toggles
+		var tq = document.getElementById("tgt-quarterly");
+		var ta = document.getElementById("tgt-annual");
+		if(tq) tq.onclick = function(){ self._set_tgt_period("quarterly",this); };
+		if(ta) ta.onclick = function(){ self._set_tgt_period("annual",this); };
+		var ts = document.getElementById("tgt-user-sel");
+		if(ts) ts.onchange = function(){ self._tgt_user = this.value||null; self.render_targets(); };
 
 		// Close multiselect on outside click
 		document.addEventListener('click', function(e){
@@ -527,6 +549,8 @@
 				self.lead_heatmap      = d.lead_heatmap||[];
 				self.monthly_stage_heatmap = d.monthly_stage_heatmap||{};
 				self.revenue_contribution  = d.revenue_contribution||[];
+				self.target_data    = d.target_data||{};
+				self.target_actuals = d.target_actuals||{};
 				self.lead_statuses     = d.lead_statuses||['Lead','Open','Replied','Opportunity',
 				                         'Quotation','Lost Quotation','Interested','Converted','Do Not Contact'];
 
@@ -577,6 +601,7 @@
 	// ── Render ────────────────────────────────────────────────────────
 
 	CRMDashboard.prototype.render_all = function () {
+		this.render_targets();
 		this.render_metrics();
 		this.render_quarterly();
 		this.render_pipeline();
@@ -1081,6 +1106,132 @@
 		var dd=document.getElementById(key+'-ms-dd');
 		if(dd) dd.classList.remove('open');
 	};
+
+	// ── Target Tracker ───────────────────────────────────────────────
+
+	CRMDashboard.prototype._set_tgt_period = function (period, btn) {
+		this._tgt_period = period;
+		var btns = document.querySelectorAll('#tgt-quarterly,#tgt-annual');
+		for (var i=0; i<btns.length; i++) btns[i].classList.remove('active');
+		if(btn) btn.classList.add('active');
+		this.render_targets();
+	};
+
+	CRMDashboard.prototype.render_targets = function () {
+		var self   = this;
+		var el     = document.getElementById('crm-target-meter');
+		if (!el) return;
+		var td     = this.target_data || {};
+		var meta   = td.meta || {};
+		var period = this._tgt_period || 'quarterly';
+
+		// Populate manager user selector on first render
+		if (this.is_mgr) {
+			var usel = document.getElementById('tgt-user-sel');
+			if (usel && usel.options.length <= 1 && this.salespersons.length) {
+				usel.innerHTML = '<option value="">All</option>';
+				this.salespersons.forEach(function(sp){
+					var o = document.createElement('option');
+					o.value = sp.user;
+					o.textContent = sp.full_name || sp.user;
+					usel.appendChild(o);
+				});
+				if (this._tgt_user) usel.value = this._tgt_user;
+			}
+		}
+
+		var show_user = this._tgt_user || (this.is_mgr ? null : this.me);
+		var tlist = (td[period] || []).slice();
+		if (show_user) tlist = tlist.filter(function(t){ return t.user === show_user; });
+
+		var period_label = period === 'quarterly'
+			? (meta.quarter || 'Q') + ' ' + (meta.fiscal_year || '')
+			: (meta.fiscal_year || 'This FY');
+
+		if (!tlist.length) {
+			var link = this.is_mgr
+				? '<a href="/app/crm-sales-target/new" style="color:#6366F1;text-decoration:none;font-weight:500">+ Set target</a>'
+				: '<span style="color:var(--text-muted)">Ask your manager to set a target.</span>';
+			el.innerHTML = '<div style="text-align:center;padding:20px 0">' +
+				'<div style="font-size:13px;color:var(--text-muted);margin-bottom:10px">No target set for ' +
+				period_label + (show_user ? ' - ' + self.sp_name(show_user) : '') + '</div>' + link + '</div>';
+			return;
+		}
+
+		var html = '';
+		tlist.forEach(function(tgt) {
+			var u = tgt.user;
+			var actuals = (self.target_actuals[u] && self.target_actuals[u][period]) || {};
+			html += self._render_target_row(tgt, actuals, tlist.length > 1);
+		});
+		el.innerHTML = html;
+	};
+
+	CRMDashboard.prototype._render_target_row = function (tgt, actuals, show_name) {
+		var self = this;
+		var html = show_name
+			? '<div style="font-size:13px;font-weight:600;color:var(--text-color);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border-color)">' + self.sp_name(tgt.user) + '</div>'
+			: '';
+
+		var metrics = [
+			{ key:'revenue',    label:'Revenue',       actual:actuals.revenue||0,   target:tgt.revenue_target||0,      curr:true,  suf:'' },
+			{ key:'leads',      label:'Leads',         actual:actuals.leads||0,      target:tgt.leads_target||0,         curr:false, suf:'' },
+			{ key:'opps',       label:'Opportunities', actual:actuals.opps||0,       target:tgt.opportunities_target||0, curr:false, suf:'' },
+			{ key:'won',        label:'Won Deals',     actual:actuals.won||0,        target:tgt.won_deals_target||0,     curr:false, suf:'' },
+			{ key:'conversion', label:'Conv. Rate',    actual:actuals.conversion||0, target:tgt.conversion_target||0,    curr:false, suf:'%' }
+		].filter(function(m){ return m.target > 0; });
+
+		if (!metrics.length) return html + '<div class="crm-empty" style="padding:12px">No target values defined.</div>';
+
+		// Format helper
+		function disp(m, val) {
+			if (m.curr) return fmt(val);
+			if (m.suf === '%') return val.toFixed(2) + '%';
+			return String(Math.round(val));
+		}
+
+		// Progress cards
+		var cards = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px">';
+		metrics.forEach(function(m) {
+			var pct   = m.target > 0 ? Math.min(Math.round((m.actual/m.target)*100),100) : 0;
+			var color = pct>=100?'#10B981':pct>=70?'#3B82F6':pct>=40?'#F59E0B':'#EF4444';
+			cards += '<div style="background:var(--fg-color);border:1px solid var(--border-color);border-radius:8px;padding:12px;position:relative;overflow:hidden">' +
+				'<div style="position:absolute;top:0;left:0;right:0;height:3px;background:'+color+'"></div>' +
+				'<div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;font-weight:600">'+m.label+'</div>' +
+				'<div style="font-size:20px;font-weight:700;color:'+color+'">'+disp(m,m.actual)+'</div>' +
+				'<div style="font-size:11px;color:var(--text-muted);margin-top:2px">of '+disp(m,m.target)+'</div>' +
+				'<div style="height:5px;background:var(--border-color);border-radius:3px;margin-top:8px;overflow:hidden">' +
+				'<div style="width:'+pct+'%;height:100%;background:'+color+';border-radius:3px;transition:width .5s"></div></div>' +
+				'<div style="font-size:11px;font-weight:600;color:'+color+';margin-top:4px">'+pct+'%</div>' +
+				'</div>';
+		});
+		cards += '</div>';
+
+		// SVG gauges for Revenue + Conversion
+		var gauges = '<div style="display:flex;gap:20px;justify-content:center;flex-wrap:wrap">';
+		[{key:'revenue',label:'Revenue',curr:true,suf:''},{key:'conversion',label:'Conv. Rate',curr:false,suf:'%'}].forEach(function(g){
+			var m = metrics.filter(function(x){return x.key===g.key;})[0];
+			if(!m) return;
+			var pct   = m.target>0 ? Math.min((m.actual/m.target)*100,100) : 0;
+			var color = pct>=100?'#10B981':pct>=70?'#3B82F6':pct>=40?'#F59E0B':'#EF4444';
+			var arc   = (pct/100)*157.08;
+			var ad    = g.curr ? fmt(m.actual) : m.actual.toFixed(2)+g.suf;
+			gauges += '<div style="text-align:center">' +
+				'<svg width="120" height="72" viewBox="0 0 120 72">' +
+				'<path d="M10,60 A50,50 0 0,1 110,60" fill="none" stroke="var(--border-color)" stroke-width="10" stroke-linecap="round"/>' +
+				'<path d="M10,60 A50,50 0 0,1 110,60" fill="none" stroke="'+color+'" stroke-width="10" stroke-linecap="round"' +
+				' stroke-dasharray="'+arc.toFixed(2)+' 157.08"/>' +
+				'<text x="60" y="56" text-anchor="middle" font-size="12" font-weight="700" fill="'+color+'">'+Math.round(pct)+'%</text>' +
+				'</svg>' +
+				'<div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;margin-top:-4px">'+g.label+'</div>' +
+				'<div style="font-size:12px;font-weight:600;margin-top:2px">'+ad+'</div>' +
+				'</div>';
+		});
+		gauges += '</div>';
+
+		return html + cards + gauges;
+	};
+
 
 	registerPage();
 })();
