@@ -24,6 +24,9 @@ def get_dashboard_data(from_date=None, to_date=None, salesperson=None):
 		leads             = _get_leads(from_date, to_date, salesperson, is_manager)
 		all_opportunities = _get_all_opportunities(salesperson, is_manager)
 		all_leads         = _get_all_leads(salesperson, is_manager)
+		# Date-range only (ignore salesperson) for Lead Status + Revenue Contribution
+		leads_unfiltered    = _get_leads(from_date, to_date, None, is_manager)
+		all_opps_unfiltered = _get_all_opportunities(None, is_manager)
 		territories       = _get_territories()
 		fiscal_years      = _get_fiscal_year_dates()
 		lead_statuses     = _get_lead_statuses()
@@ -45,6 +48,7 @@ def get_dashboard_data(from_date=None, to_date=None, salesperson=None):
 			"salespersons":          _get_sales_users(),
 			"opportunities":         opportunities,
 			"leads":                 leads,
+			"lead_status_leads":     leads_unfiltered,
 			"kpis":                  _calculate_kpis(opportunities, leads, all_opportunities, from_date, to_date),
 			"funnel":                _calculate_funnel(opportunities),
 			"territory_stats":       _calculate_territory_stats(territories, opportunities, leads),
@@ -56,7 +60,7 @@ def get_dashboard_data(from_date=None, to_date=None, salesperson=None):
 			"monthly_stage_heatmap": _calculate_monthly_stage_heatmap(all_opportunities, sales_stages),
 			"opp_user_month_heatmap":  _calculate_user_month_heatmap(all_opportunities, "opportunity_owner", "transaction_date"),
 			"lead_user_month_heatmap": _calculate_user_month_heatmap(all_leads, "lead_owner", "creation"),
-			"revenue_contribution":  _calculate_revenue_contribution(all_opportunities),
+			"revenue_contribution":  _calculate_revenue_contribution(all_opps_unfiltered),
 	}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "CRM Dashboard Error")

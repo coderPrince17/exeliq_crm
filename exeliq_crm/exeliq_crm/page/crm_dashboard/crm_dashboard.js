@@ -1,66 +1,13 @@
-// Exeliq CRM Dashboard v27
-// Root fix: No Python-escaped template literals — pure JS string concatenation
-// Fixes: template literal rendering, duplicate dashboard, broken heatmaps,
-//        filter layout, empty charts, repeated UI
-
-(function () {
-
-	// ── Page registration ─────────────────────────────────────────────
-	// Only one initialization — guard prevents multiple instances
-
-	var _registered = false;
-
-	function registerPage() {
-		if (!frappe || !frappe.pages) { setTimeout(registerPage, 100); return; }
-		if (_registered) return;
-		_registered = true;
-
-		// Register the proper Frappe page handler — this is the correct lifecycle
-		if (!frappe.pages['crm-dashboard']) frappe.pages['crm-dashboard'] = {};
-		frappe.pages['crm-dashboard'].on_page_load = function (wrapper) {
-			loadChartJS(function () { initDashboard(wrapper); });
-		};
-
-		// If the router already navigated to crm-dashboard before our JS loaded,
-		// on_page_load won't fire again. We force Frappe to re-render the page
-		// THROUGH ITS OWN ROUTER so we get a real Frappe page container
-		// (never a position:fixed overlay, which caused layout overlap).
-		_ensure_loaded();
-	}
-
-	function _ensure_loaded() {
-		var attempts = 0;
-		var timer = setInterval(function () {
-			attempts++;
-			if (frappe.crm_dashboard) { clearInterval(timer); return; }
-			if (attempts > 20) { clearInterval(timer); return; }
-
-			var on_crm = window.location.href.indexOf('/crm-dashboard') !== -1;
-			if (!on_crm) return;
-
-			// Look for the real Frappe page wrapper that the router creates
-			var wrapper = document.querySelector('#page-crm-dashboard')
-			           || document.querySelector('[data-page-route="crm-dashboard"]');
-
-			if (wrapper) {
-				// Real Frappe container exists — use it
-				clearInterval(timer);
-				loadChartJS(function () { initDashboard(wrapper); });
-			} else if (frappe.router && attempts >= 2) {
-				// No container yet — ask Frappe's router to render the page properly.
-				// This creates a REAL page container (not a fixed overlay).
-				clearInterval(timer);
-				frappe.set_route('crm-dashboard').then(function () {
-					setTimeout(function () {
-						if (frappe.crm_dashboard) return;
-						var w = document.querySelector('#page-crm-dashboard')
-						     || document.querySelector('[data-page-route="crm-dashboard"]');
-						if (w) loadChartJS(function () { initDashboard(w); });
-					}, 100);
-				});
-			}
-		}, 150);
-	}
+// Exeliq CRM Dashboard — standard Frappe page lifecycle (no polling, no set_route)
+frappe.pages['crm-dashboard'].on_page_load = function (wrapper) {
+	loadChartJS(function () {
+		if (frappe.crm_dashboard) { frappe.crm_dashboard.destroy_charts(); }
+		var page = frappe.ui.make_app_page({
+			parent: wrapper, title: 'CRM Pipeline Dashboard', single_column: true
+		});
+		frappe.crm_dashboard = new CRMDashboard(page);
+	});
+};
 
 	function loadChartJS(cb) {
 		if (window.Chart) { cb(); return; }
@@ -71,12 +18,21 @@
 	}
 
 	function initDashboard(wrapper) {
-		if (frappe.crm_dashboard) frappe.crm_dashboard.destroy_charts();
-		var page = frappe.ui.make_app_page({
-			parent: wrapper, title: 'CRM Pipeline Dashboard', single_column: true
-		});
-		frappe.crm_dashboard = new CRMDashboard(page);
-	}
+                if (!wrapper || !wrapper.appendChild) {
+                        wrapper = document.querySelector('#page-crm-dashboard')
+                               || document.querySelector('[data-page-route="crm-dashboard"]')
+                               || (cur_page && cur_page.page && cur_page.page.wrapper);
+                }
+                if (!wrapper || !wrapper.appendChild) {
+                        setTimeout(function () { initDashboard(); }, 150);
+                        return;
+                }
+                if (frappe.crm_dashboard) { frappe.crm_dashboard.destroy_charts(); }
+                var page = frappe.ui.make_app_page({
+                        parent: wrapper, title: 'CRM Pipeline Dashboard', single_column: true
+                });
+                frappe.crm_dashboard = new CRMDashboard(page);
+        }
 
 	// ── Helpers ───────────────────────────────────────────────────────
 
@@ -441,51 +397,51 @@
 
 	CRMDashboard.prototype.mount_filters = function () {
 		var self = this;
-		var pf = this.page.page_form;
-		if (!pf || !pf.length) return;
+		// The page_form created by make_app_page is DETACHED (no parent). It must be
+		// appended into the visible page head, or the filters never render. The old
+		// code did this but ran once, before the head existed on soft-nav (hence
+		// 'filters only on hard refresh'). We retry until both the form and a target
+		// head container are ready, then attach exactly once.
+		var tries = 0;
+		function attach() {
+			tries++;
+			var pf = self.page && self.page.page_form;
+			if (!pf || !pf.length) { if (tries < 50) setTimeout(attach, 100); return; }
 
-		// Keep the filter bar in its NATURAL Frappe position (page-head .container)
-		// Do NOT move it with appendChild — moving it caused the overlap bug where
-		// the filter row detached and floated over the cards below.
-		// Instead we just make Frappe's own page_form visible via CSS.
+			// Prefer this page's own head container; fall back to the route page head.
+			var hc = (self.page.page_head && self.page.page_head.find('.container')[0])
+			      || document.querySelector('#page-crm-dashboard .page-head .container')
+			      || document.querySelector('.page-head .container');
+			if (!hc) { if (tries < 50) setTimeout(attach, 100); return; }
 
-		var hc = document.querySelector('.page-head .container');
-		if (hc) {
-			// Remove any stale duplicate filter row from a previous init
+			// Remove any stale filter row from a previous init (avoids duplicates).
 			var stale = hc.querySelectorAll('.page-form.row');
 			for (var i = 0; i < stale.length; i++) {
 				if (stale[i] !== pf[0] && stale[i].id !== 'crm-pf') {
-					stale[i].parentElement.removeChild(stale[i]);
+					if (stale[i].parentElement) stale[i].parentElement.removeChild(stale[i]);
 				}
 			}
-			// Only append if not already inside the head container
 			if (pf[0].parentElement !== hc) {
 				pf[0].id = 'crm-pf';
 				hc.appendChild(pf[0]);
 			}
+			pf.removeClass('hide');
 		}
+		attach();
 
-		// Make the filter bar visible and laid out inline.
-		// Use position:relative (NOT fixed/absolute) so it occupies normal
-		// document flow and pushes the dashboard content down — this is what
-		// prevents the overlap with the cards below.
 		var st = document.getElementById('crm-pf-css') || document.createElement('style');
-		st.id  = 'crm-pf-css';
+		st.id = 'crm-pf-css';
 		st.textContent =
 			'.page-form.row{' +
-			'display:flex!important;' +
-			'flex-wrap:wrap!important;' +
-			'gap:8px!important;' +
-			'padding:8px 0!important;' +
-			'align-items:flex-end!important;' +
-			'width:100%!important;' +
-			'position:relative!important;' +
-			'border-top:1px solid var(--border-color)!important;' +
-			'margin-top:4px!important;' +
-			'clear:both!important;' +
-			'}' +
+			'display:flex!important;flex-wrap:wrap!important;gap:8px!important;' +
+			'padding:8px 0!important;align-items:flex-end!important;width:100%!important;' +
+			'position:relative!important;border-top:1px solid var(--border-color)!important;' +
+			'margin-top:4px!important;clear:both!important;}' +
+			'.page-form.row > .frappe-control{flex:0 0 auto!important;width:auto!important;max-width:none!important;min-width:150px!important;margin:0!important;padding:0!important}' +
+			'.page-form.row .form-group{margin-bottom:0!important}' +
+			'.page-form.row .btn{align-self:flex-end!important}' +
 			'#page-crm-dashboard .layout-main-section{padding-top:0!important}';
-		document.head.appendChild(st);
+		if (!st.parentElement) document.head.appendChild(st);
 	};
 
 	CRMDashboard.prototype.period_dates = function (p) {
@@ -558,6 +514,7 @@
 				var d=r.message;
 				self.opps              = d.opportunities||[];
 				self.leads             = d.leads||[];
+					self.lead_status_leads = d.lead_status_leads || d.leads || [];
 				self.kpis              = d.kpis||{};
 				self.territory_stats   = d.territory_stats||[];
 				self.salesperson_stats = d.salesperson_stats||[];
@@ -750,7 +707,7 @@
 	// ── Lead Status donut ─────────────────────────────────────────────
 
 	CRMDashboard.prototype.render_lead_chart = function () {
-		var l=this.leads, statuses=this.lead_statuses;
+		var l=this.lead_status_leads||this.leads, statuses=this.lead_statuses;
 		var colors=['#6B7280',C.blue,C.green,C.purple,C.pink,C.red,C.yellow,C.teal,C.indigo];
 		var counts=statuses.map(function(s){return l.filter(function(x){return x.status===s;}).length;});
 		var total=counts.reduce(function(a,b){return a+b;},0);
@@ -1125,6 +1082,3 @@
 		var dd=document.getElementById(key+'-ms-dd');
 		if(dd) dd.classList.remove('open');
 	};
-
-	registerPage();
-})();

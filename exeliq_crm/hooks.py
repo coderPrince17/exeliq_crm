@@ -15,4 +15,3 @@ after_sync    = "exeliq_crm.setup.after_install"
 after_migrate = "exeliq_crm.setup.after_install"
 
 # Load dashboard JS on every desk page
-app_include_js = ["/assets/exeliq_crm/js/crm_dashboard.js"]
